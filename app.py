@@ -1,50 +1,86 @@
 from shiny import App, ui, render, reactive
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
+import os
 
-# Define the UI with background color and spacing
+# Define a consistent color palette
+COLORS = {
+    'primary': '#3498db',    # blue
+    'secondary': '#e74c3c',  # red
+    'tertiary': '#2ecc71',   # green
+    'quaternary': '#f39c12', # orange
+    'background': '#f5f5f5', # light gray
+    'text': '#2c3e50',       # dark blue/gray
+}
+
 app_ui = ui.page_fluid(
     ui.tags.style(
         """
         body {
             background-color: #f5f5f5;
             padding: 20px;
+            color: #2c3e50;
+        }
+        .app-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .app-author {
+            font-size: 14px;
+            font-style: italic;
+            margin-bottom: 20px;
+            color: #7f8c8d;
+        }
+        .section-title {
+            background-color: #eaeaea;
+            padding: 5px 10px;
+            border-left: 4px solid #3498db;
+        }
+        .file-size-info {
+            margin-top: 5px;
         }
         """
     ),
-    ui.h2("Let Shiny Do EDA For You : By Aatif Ahmad"),
-    ui.input_file("file", "Choose CSV File", accept=".csv", multiple=False),
+    ui.div(ui.h2("Let Shiny Do EDA For You", class_="app-title"),
+           ui.p("By Aatif Ahmad", class_="app-author")),
+    
+    ui.input_file("file", "Choose CSV File (Max size: 15 MB)", accept=".csv", multiple=False),
     ui.output_text_verbatim("file_info"),
     ui.output_data_frame("file_preview"),
     
-    ui.br(),  # Add spacing
-    ui.h3("Summary Statistics"),
+    ui.br(),
+    ui.h3("Summary Statistics", class_="section-title"),
     ui.output_data_frame("summary_stats"),
     
-    ui.br(),  # Add spacing
-    ui.h3("Column Visualization and Filtering (Numerical)"),
+    ui.br(),
+    ui.h3("Missing Values Analysis", class_="section-title"),
+    ui.output_data_frame("missing_values"),
+    
+    ui.br(),
+    ui.h3("Column Visualization and Filtering (Numerical)", class_="section-title"),
     ui.input_select("num_column", "Select Numerical Column", choices=[]),
     ui.input_slider("range_filter", "Filter Range", min=0, max=100, value=[0, 100]),
     ui.output_plot("histogram"),
     ui.output_plot("boxplot"),
     
-    ui.br(),  # Add spacing
-    ui.h3("Categorical Column Visualization"),
+    ui.br(), 
+    ui.h3("Categorical Column Visualization", class_="section-title"),
     ui.input_select("cat_column", "Select Categorical Column (≤8 categories)", choices=[]),
     ui.output_plot("barplot"),
     
-    ui.br(),  # Add spacing
-    ui.h3("Scatter Plot (Two Numerical Columns)"),
+    ui.br(), 
+    ui.h3("Scatter Plot (Two Numerical Columns)", class_="section-title"),
     ui.input_select("scatter_x", "Select X-axis Numerical Column", choices=[]),
     ui.input_select("scatter_y", "Select Y-axis Numerical Column", choices=[]),
     ui.input_select("scatter_color", "Color by Categorical Column (optional)", choices=["None"], selected="None"),
     ui.output_plot("scatterplot"),
     
-    ui.br(),  # Add spacing
+    ui.br(), 
     ui.output_text_verbatim("debug_info")
 )
 
-# Server logic remains unchanged
 def server(input, output, session):
     @reactive.Calc
     def uploaded_data():
@@ -52,6 +88,12 @@ def server(input, output, session):
         if not file:
             return None
         try:
+            # Check file size (15 MB limit)
+            file_size_mb = file[0]["size"] / (1024 * 1024)
+            if file_size_mb > 15:
+                print(f"File too large: {file_size_mb:.2f} MB")
+                return None
+                
             df = pd.read_csv(file[0]["datapath"])
             print(f"Data loaded: {df.shape}")
             return df
@@ -129,7 +171,17 @@ def server(input, output, session):
         file = input.file()
         if not file:
             return "No file uploaded yet"
-        return f"Uploaded file: {file[0]['name']}\nSize: {file[0]['size']} bytes"
+        
+        # Show size in KB if less than 1 MB
+        file_size_bytes = file[0]['size']
+        if file_size_bytes < 1024 * 1024:  # Less than 1 MB
+            file_size_kb = file_size_bytes / 1024
+            size_str = f"{file_size_kb:.2f} KB"
+        else:
+            file_size_mb = file_size_bytes / (1024 * 1024)
+            size_str = f"{file_size_mb:.2f} MB"
+            
+        return f"Uploaded file: {file[0]['name']}\nSize: {size_str}"
 
     @output
     @render.data_frame
@@ -156,6 +208,28 @@ def server(input, output, session):
             return render.DataGrid(pd.DataFrame({"Error": [str(e)]}))
 
     @output
+    @render.data_frame
+    def missing_values():
+        data = uploaded_data()
+        if data is None:
+            return render.DataGrid(pd.DataFrame(), height="300px")
+        
+        try:
+            # Calculate missing values statistics
+            missing_stats = pd.DataFrame({
+                'Column': data.columns,
+                'Data Type': data.dtypes.astype(str),
+                'Missing Values': data.isna().sum(),
+                'Missing (%)': (data.isna().sum() / len(data) * 100).round(2),
+                'Complete Values': data.notna().sum(),
+                'Complete (%)': (data.notna().sum() / len(data) * 100).round(2)
+            })
+            return render.DataGrid(missing_stats, height="300px")
+        except Exception as e:
+            print(f"Error in missing values stats: {e}")
+            return render.DataGrid(pd.DataFrame({"Error": [str(e)]}))
+
+    @output
     @render.plot
     def histogram():
         data = filtered_data()
@@ -164,10 +238,12 @@ def server(input, output, session):
             return None
         try:
             fig, ax = plt.subplots()
-            ax.hist(data[selected_col].dropna(), bins=30, color='skyblue', edgecolor='black')
+            ax.hist(data[selected_col].dropna(), bins=30, color=COLORS['primary'], edgecolor='black')
             ax.set_title(f"Distribution of {selected_col}")
             ax.set_xlabel(selected_col)
             ax.set_ylabel("Count")
+            ax.grid(True, linestyle='--', alpha=0.3)
+            plt.tight_layout()
             return fig
         except Exception as e:
             print(f"Error creating histogram: {e}")
@@ -183,12 +259,14 @@ def server(input, output, session):
         try:
             fig, ax = plt.subplots(figsize=(8, 2))
             ax.boxplot(data[selected_col].dropna(), vert=False, patch_artist=True,
-                      showfliers=True, boxprops=dict(facecolor='skyblue'),
-                      medianprops=dict(color='red'), whiskerprops=dict(color='black'),
-                      flierprops=dict(marker='o', markerfacecolor='red', markersize=5))
+                      showfliers=True, boxprops=dict(facecolor=COLORS['primary']),
+                      medianprops=dict(color=COLORS['secondary']), 
+                      whiskerprops=dict(color=COLORS['text']),
+                      flierprops=dict(marker='o', markerfacecolor=COLORS['secondary'], markersize=5))
             ax.set_title(f"Boxplot of {selected_col}")
             ax.set_xlabel(selected_col)
             ax.grid(True, linestyle='--', alpha=0.7)
+            plt.tight_layout()
             return fig
         except Exception as e:
             print(f"Error creating boxplot: {e}")
@@ -204,11 +282,12 @@ def server(input, output, session):
         try:
             fig, ax = plt.subplots(figsize=(8, 4))
             value_counts = data[selected_col].value_counts()
-            ax.bar(value_counts.index, value_counts.values, color='lightcoral', edgecolor='black')
+            ax.bar(value_counts.index, value_counts.values, color=COLORS['tertiary'], edgecolor='black')
             ax.set_title(f"Bar Plot of {selected_col}")
             ax.set_xlabel(selected_col)
             ax.set_ylabel("Count")
             plt.xticks(rotation=45, ha='right')
+            plt.tight_layout()
             return fig
         except Exception as e:
             print(f"Error creating barplot: {e}")
@@ -227,22 +306,26 @@ def server(input, output, session):
             return None
         
         try:
-            fig, ax = plt.subplots(figsize=(8, 2))
+            # Make figure wider to accommodate legend
+            fig, ax = plt.subplots(figsize=(10, 6))
             
             if color_col == "None" or color_col not in data.columns:
-                ax.scatter(data[x_col], data[y_col], alpha=0.5, color='teal')
+                ax.scatter(data[x_col], data[y_col], alpha=0.5, color=COLORS['quaternary'])
             else:
                 categories = data[color_col].dropna().unique()
-                colors = plt.cm.get_cmap('Set1', len(categories))
+                # Fixed: using matplotlib.colormaps instead of get_cmap
+                colormap = plt.colormaps['Set1']
                 for i, category in enumerate(categories):
                     category_data = data[data[color_col] == category]
                     ax.scatter(category_data[x_col], 
                               category_data[y_col], 
                               alpha=0.5, 
-                              color=colors(i), 
+                              color=colormap(i % colormap.N), 
                               label=str(category))
-                ax.legend(title=color_col, bbox_to_anchor=(1.05, 1), loc='upper left')
-                plt.tight_layout()
+                # Place legend outside and to the right of the axes
+                ax.legend(title=color_col, bbox_to_anchor=(1.02, 1), loc='upper left')
+                # Adjust layout to make room for legend
+                plt.subplots_adjust(right=0.8)
 
             ax.set_title(f"Scatter Plot: {x_col} vs {y_col}")
             ax.set_xlabel(x_col)
@@ -281,7 +364,6 @@ def server(input, output, session):
                 f"Filter range: {input.range_filter()}\n"
                 f"Cat column unique values: {raw_data[cat_col].nunique() if cat_col in raw_data.columns else 'N/A'}")
 
-# Create the app
 app = App(app_ui, server)
 
 if __name__ == "__main__":
